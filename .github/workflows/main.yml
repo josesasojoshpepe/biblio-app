@@ -16,7 +16,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instalar Flutter (Android Studio en la nube)
+      - name: Instalar Java (Requisito para Android)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Instalar Flutter (Motor de Android)
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
@@ -25,7 +31,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Fabricar el APK
-        run: flet build apk
+        run: flet build apk app_movil.py
 
       - name: Guardar archivo APK
         uses: actions/upload-artifact@v4
