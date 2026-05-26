@@ -43,7 +43,7 @@ jobs:
       - name: Fabricar el APK (Modo Detallado)
         run: |
           cd flet_app
-          flet build apk --verbose
+          yes | flet build apk --verbose
 
       - name: Guardar archivo APK
         uses: actions/upload-artifact@v4
