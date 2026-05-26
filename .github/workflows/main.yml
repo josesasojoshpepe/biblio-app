@@ -16,25 +16,37 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instalar Java (Requisito para Android)
+      - name: Instalar Java (Motor Android)
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Instalar Flutter (Motor de Android)
+      - name: Instalar Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Instalar Flet y librerías
-        run: pip install -r requirements.txt
+      - name: Preparar Entorno Seguro
+        run: |
+          mkdir -p flet_app
+          cp *.py flet_app/ || true
+          if [ -f flet_app/app_movil.py ]; then mv flet_app/app_movil.py flet_app/main.py; fi
+          echo "flet" > flet_app/requirements.txt
+          echo "pymongo" >> flet_app/requirements.txt
+          echo "dnspython" >> flet_app/requirements.txt
+          echo "certifi" >> flet_app/requirements.txt
 
-      - name: Fabricar el APK
-        run: flet build apk
+      - name: Instalar compilador
+        run: pip install flet
+
+      - name: Fabricar el APK (Modo Detallado)
+        run: |
+          cd flet_app
+          flet build apk --verbose
 
       - name: Guardar archivo APK
         uses: actions/upload-artifact@v4
         with:
           name: BiblioApp-Movil
-          path: build/apk/**/*.apk
+          path: flet_app/build/apk/**/*.apk
