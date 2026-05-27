@@ -1,46 +1,31 @@
 import flet as ft
 from pymongo import MongoClient
-import sqlite3
 from datetime import datetime, timedelta
-import certifi
 import unicodedata
 import re
-import threading  # LIBRERÍA NUEVA PARA PROCESOS EN SEGUNDO PLANO
-
-# LIBRERÍAS DE CORREO
+import threading
 import smtplib
 import random
 from email.message import EmailMessage
 
-# CREDENCIALES
 MONGO_URI = "mongodb+srv://admin_biblioteca:Lopezmateo0710@biblioteca.cz999dn.mongodb.net/?retryWrites=true&w=majority&appName=biblioteca"
 CORREO_REMITENTE = "avisos.biblioteca.adolfolm@gmail.com"
 PASSWORD_APP = "idyhkqahuxnzcosd"
 
-# =======================================================
-# OPTIMIZACIÓN 1: CONEXIÓN GLOBAL (Connection Pooling)
-# Mantiene la base de datos lista desde que abres la app
-# =======================================================
-CLIENTE_MONGO = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2500, tls=True, tlsAllowInvalidCertificates=True)
-DB_NUBE = CLIENTE_MONGO['biblioteca_centro']
-
-# --- INICIALIZAR MEMORIA LOCAL (SQLite) ---
-def inicializar_cache():
-    conexion = sqlite3.connect("movil_cache.db")
-    cursor = conexion.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sync_usuarios (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        nombre_completo TEXT, edad TEXT, telefono TEXT, correo TEXT,
-                        fecha_expedicion TEXT, fecha_vencimiento TEXT)''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sync_prestamos (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        nombre_usuario TEXT, nombre_libro TEXT,
-                        fecha_prestamo TEXT, fecha_entrega TEXT)''')
-    conexion.commit()
-    conexion.close()
-
-inicializar_cache()
+def enviar_correo_silencioso(correo, nombre, libros, fecha_limite):
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=5)
+        server.login(CORREO_REMITENTE, PASSWORD_APP)
+        msg = EmailMessage()
+        msg['Subject'] = "Confirmación de Préstamo 📚"
+        msg['From'] = f"Biblioteca Centro Recreativo <{CORREO_REMITENTE}>"
+        msg['To'] = correo
+        libros_str = "\n- ".join(libros)
+        msg.set_content(f"Hola {nombre},\n\nHas solicitado el préstamo de:\n\n- {libros_str}\n\n⚠️ Devolución límite: {fecha_limite} (Días hábiles).")
+        server.send_message(msg)
+        server.quit()
+    except Exception:
+        pass
 
 def main(page: ft.Page):
     page.title = "BiblioApp Móvil"
@@ -50,19 +35,17 @@ def main(page: ft.Page):
     page.padding = 20
     page.scroll = ft.ScrollMode.AUTO
 
-    # =======================================================
-    # SISTEMA DE ALERTAS
-    # =======================================================
+    try:
+        CLIENTE_MONGO = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2500, tls=True, tlsAllowInvalidCertificates=True)
+        DB_NUBE = CLIENTE_MONGO['biblioteca_centro']
+    except Exception:
+        pass
     banner_alerta = ft.Text("", size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
     
     def mostrar_alerta(mensaje, color):
         banner_alerta.value = mensaje
         banner_alerta.color = color
         page.update()
-
-    # =======================================================
-    # COMPONENTES: REGISTRO DE USUARIOS
-    # =======================================================
     nombre_u = ft.TextField(label="Nombre Completo", prefix_icon=ft.Icons.PERSON, border_radius=10)
     edad_u = ft.TextField(label="Edad", keyboard_type=ft.KeyboardType.NUMBER, prefix_icon=ft.Icons.CALENDAR_TODAY, border_radius=10)
     tel_u = ft.TextField(label="Teléfono Móvil", keyboard_type=ft.KeyboardType.PHONE, prefix_icon=ft.Icons.PHONE, border_radius=10)
@@ -75,6 +58,10 @@ def main(page: ft.Page):
             
             if not nombre_u.value or not tel_u.value:
                 mostrar_alerta("⚠️ Nombre y teléfono son obligatorios.", ft.Colors.RED_400)
+                return
+
+            if len(tel_u.value.strip()) != 10 or not tel_u.value.strip().isdigit():
+                mostrar_alerta("⚠️ El teléfono debe tener 10 números exactos.", ft.Colors.RED_400)
                 return
                 
             btn_gu.disabled = True
@@ -96,7 +83,6 @@ def main(page: ft.Page):
             }
             
             try:
-                # Comprobación ultrarrápida usando la conexión global
                 CLIENTE_MONGO.admin.command('ping')
                 
                 if check_rapido.value == True or not correo_u.value:
@@ -158,12 +144,11 @@ def main(page: ft.Page):
                         mostrar_alerta("❌ Falló el correo. Usa Modo Rápido.", ft.Colors.RED_400)
 
             except Exception:
-                con = sqlite3.connect("movil_cache.db")
-                con.execute("INSERT INTO sync_usuarios (nombre_completo, edad, telefono, correo, fecha_expedicion, fecha_vencimiento) VALUES (?,?,?,?,?,?)", 
-                            (nuevo_usr["nombre_completo"], nuevo_usr["edad"], nuevo_usr["telefono"], nuevo_usr["correo"], nuevo_usr["fecha_expedicion"], nuevo_usr["fecha_vencimiento"]))
-                con.commit()
-                con.close()
-                mostrar_alerta("📱 Sin red. Usuario guardado localmente.", ft.Colors.ORANGE_400)
+                offline_users = page.client_storage.get("offline_users") or []
+                offline_users.append(nuevo_usr)
+                page.client_storage.set("offline_users", offline_users)
+                
+                mostrar_alerta("📱 Sin red. Usuario guardado en el teléfono.", ft.Colors.ORANGE_400)
                 nombre_u.value = ""; edad_u.value = ""; tel_u.value = ""; correo_u.value = ""
         
         except Exception as error_critico:
@@ -176,27 +161,8 @@ def main(page: ft.Page):
 
     btn_gu = ft.ElevatedButton("Guardar Usuario", on_click=guardar_usuario, width=350, height=50, style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE))
 
-    # =======================================================
-    # COMPONENTES: PRÉSTAMO RÁPIDO
-    # =======================================================
     nombre_p = ft.TextField(label="Nombre del Usuario", prefix_icon=ft.Icons.PERSON_SEARCH, border_radius=10)
     libro_p = ft.TextField(label="Libros (separados por coma)", prefix_icon=ft.Icons.MENU_BOOK, border_radius=10)
-
-    # OPTIMIZACIÓN 2: Función independiente para enviar correos en segundo plano
-    def enviar_correo_silencioso(correo, nombre, libros, fecha_limite):
-        try:
-            server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=5)
-            server.login(CORREO_REMITENTE, PASSWORD_APP)
-            msg = EmailMessage()
-            msg['Subject'] = "Confirmación de Préstamo 📚"
-            msg['From'] = f"Biblioteca Centro Recreativo <{CORREO_REMITENTE}>"
-            msg['To'] = correo
-            libros_str = "\n- ".join(libros)
-            msg.set_content(f"Hola {nombre},\n\nHas solicitado el préstamo de:\n\n- {libros_str}\n\n⚠️ Devolución límite: {fecha_limite} (Días hábiles).")
-            server.send_message(msg)
-            server.quit()
-        except Exception:
-            pass # Falla en silencio si no hay red, no interrumpe la app
 
     def guardar_prestamo(e):
         try:
@@ -222,7 +188,6 @@ def main(page: ft.Page):
             lista_libros = [l.strip().title() for l in libro_p.value.split(",") if l.strip()]
 
             try:
-                # Comprobación ultrarrápida (Evita los 2 segundos de latencia)
                 CLIENTE_MONGO.admin.command('ping')
                 col_u = DB_NUBE['usuarios']
                 col_p = DB_NUBE['prestamos']
@@ -249,19 +214,18 @@ def main(page: ft.Page):
                     col_p.insert_one({"nombre_usuario": encontrado, "nombre_libro": lib, "fecha_prestamo": s_hoy, "fecha_entrega": s_ent, "estado": "Pendiente"})
                 
                 if correo_usr:
-                    # MAGIA: Lanza el correo en un hilo paralelo para que la interfaz no se congele
                     threading.Thread(target=enviar_correo_silencioso, args=(correo_usr, encontrado, lista_libros, s_ent)).start()
 
                 mostrar_alerta(f"☁️ ¡Préstamo activo! Devolución: {s_ent}", ft.Colors.GREEN_400)
                 nombre_p.value = ""; libro_p.value = ""
             
             except Exception:
-                con = sqlite3.connect("movil_cache.db")
+                # GUARDADO OFFLINE NATIVO DE FLET
+                offline_prestamos = page.client_storage.get("offline_prestamos") or []
                 for lib in lista_libros:
-                    con.execute("INSERT INTO sync_prestamos (nombre_usuario, nombre_libro, fecha_prestamo, fecha_entrega) VALUES (?,?,?,?)", 
-                                (nombre_p.value.strip().title(), lib, s_hoy, s_ent))
-                con.commit()
-                con.close()
+                    offline_prestamos.append({"nombre_usuario": nombre_p.value.strip().title(), "nombre_libro": lib, "fecha_prestamo": s_hoy, "fecha_entrega": s_ent})
+                page.client_storage.set("offline_prestamos", offline_prestamos)
+                
                 mostrar_alerta(f"📱 Sin red. Préstamo guardado local.", ft.Colors.ORANGE_400)
                 nombre_p.value = ""; libro_p.value = ""
 
@@ -275,9 +239,6 @@ def main(page: ft.Page):
 
     btn_gp = ft.ElevatedButton("Registrar Préstamo", on_click=guardar_prestamo, width=350, height=50, style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_600, color=ft.Colors.WHITE))
 
-    # =======================================================
-    # VISTAS DE NAVEGACIÓN
-    # =======================================================
     vista_usuarios = ft.Column([
         ft.Text("Nuevo Registro", size=24, weight=ft.FontWeight.BOLD),
         nombre_u, edad_u, tel_u, correo_u, check_rapido,
@@ -310,9 +271,6 @@ def main(page: ft.Page):
     btn_nav_p = ft.TextButton("📚 Préstamos", on_click=mostrar_prestamos, style=ft.ButtonStyle(color=ft.Colors.GREY_500))
     barra_navegacion = ft.Row([btn_nav_u, btn_nav_p], alignment=ft.MainAxisAlignment.CENTER)
 
-    # =======================================================
-    # SINCRONIZACIÓN MAESTRA
-    # =======================================================
     def sincronizar(e):
         try:
             btn_sync.disabled = True
@@ -320,36 +278,27 @@ def main(page: ft.Page):
             
             CLIENTE_MONGO.admin.command('ping')
             
-            con = sqlite3.connect("movil_cache.db")
-            con.row_factory = sqlite3.Row
-            cur = con.cursor()
-            
-            cur.execute("SELECT * FROM sync_usuarios")
-            usuarios_offline = cur.fetchall()
-            for u in usuarios_offline:
-                d = dict(u)
-                d.pop('id')
-                d.update({"domicilio": "Pendiente", "cp": "S/R", "telefono2": "S/R", "ocupacion": "S/R", "escuela_trabajo": "S/R"})
-                DB_NUBE['usuarios'].insert_one(d)
-            cur.execute("DELETE FROM sync_usuarios")
-            
-            cur.execute("SELECT * FROM sync_prestamos")
-            prestamos_offline = cur.fetchall()
-            for p in prestamos_offline:
-                d = dict(p)
-                d.pop('id')
-                d.update({"estado": "Pendiente"})
-                DB_NUBE['prestamos'].insert_one(d)
-            cur.execute("DELETE FROM sync_prestamos")
-            
-            con.commit()
-            con.close()
+            usuarios_offline = page.client_storage.get("offline_users") or []
+            prestamos_offline = page.client_storage.get("offline_prestamos") or []
             
             total = len(usuarios_offline) + len(prestamos_offline)
-            if total > 0:
-                mostrar_alerta(f"☁️ ¡{total} registros subidos con éxito!", ft.Colors.BLUE_400)
-            else:
+            if total == 0:
                 mostrar_alerta("✅ Todo está sincronizado.", ft.Colors.BLUE_400)
+                btn_sync.disabled = False
+                page.update()
+                return
+
+            for u in usuarios_offline:
+                u.update({"domicilio": "Pendiente", "cp": "S/R", "telefono2": "S/R", "ocupacion": "S/R", "escuela_trabajo": "S/R"})
+                DB_NUBE['usuarios'].insert_one(u)
+            page.client_storage.remove("offline_users")
+            
+            for p in prestamos_offline:
+                p.update({"estado": "Pendiente"})
+                DB_NUBE['prestamos'].insert_one(p)
+            page.client_storage.remove("offline_prestamos")
+            
+            mostrar_alerta(f"☁️ ¡{total} registros subidos con éxito!", ft.Colors.BLUE_400)
                 
         except Exception:
             mostrar_alerta("❌ Aún no hay red para sincronizar.", ft.Colors.RED_400)
