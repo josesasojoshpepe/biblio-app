@@ -1,5 +1,7 @@
 import flet as ft
 from pymongo import MongoClient
+import sqlite3
+import os
 from datetime import datetime, timedelta
 import unicodedata
 import re
@@ -11,17 +13,34 @@ from email.message import EmailMessage
 MONGO_URI = "mongodb+srv://admin_biblioteca:Lopezmateo0710@biblioteca.cz999dn.mongodb.net/?retryWrites=true&w=majority&appName=biblioteca"
 CORREO_REMITENTE = "avisos.biblioteca.adolfolm@gmail.com"
 PASSWORD_APP = "idyhkqahuxnzcosd"
+CARPETA_ANDROID = os.environ.get("FLET_APP_STORAGE_DATA", ".")
+RUTA_DB = os.path.join(CARPETA_ANDROID, "movil_cache.db")
+def inicializar_cache():
+    conexion = sqlite3.connect(RUTA_DB)
+    cursor = conexion.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sync_usuarios (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        nombre_completo TEXT, edad TEXT, telefono TEXT, correo TEXT,
+                        fecha_expedicion TEXT, fecha_vencimiento TEXT)''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sync_prestamos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        nombre_usuario TEXT, nombre_libro TEXT,
+                        fecha_prestamo TEXT, fecha_entrega TEXT)''')
+    conexion.commit()
+    conexion.close()
 
+inicializar_cache()
 def enviar_correo_silencioso(correo, nombre, libros, fecha_limite):
     try:
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=5)
         server.login(CORREO_REMITENTE, PASSWORD_APP)
         msg = EmailMessage()
-        msg['Subject'] = "Confirmación de Préstamo 📚"
+        msg['Subject'] = "Confirmación de Préstamo "
         msg['From'] = f"Biblioteca Centro Recreativo <{CORREO_REMITENTE}>"
         msg['To'] = correo
         libros_str = "\n- ".join(libros)
-        msg.set_content(f"Hola {nombre},\n\nHas solicitado el préstamo de:\n\n- {libros_str}\n\n⚠️ Devolución límite: {fecha_limite} (Días hábiles).")
+        msg.set_content(f"Hola {nombre},\n\nHas solicitado el préstamo de:\n\n- {libros_str}\n\n Devolución límite: {fecha_limite} (Días hábiles).")
         server.send_message(msg)
         server.quit()
     except Exception:
@@ -40,12 +59,14 @@ def main(page: ft.Page):
         DB_NUBE = CLIENTE_MONGO['biblioteca_centro']
     except Exception:
         pass
+
     banner_alerta = ft.Text("", size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
     
     def mostrar_alerta(mensaje, color):
         banner_alerta.value = mensaje
         banner_alerta.color = color
         page.update()
+
     nombre_u = ft.TextField(label="Nombre Completo", prefix_icon=ft.Icons.PERSON, border_radius=10)
     edad_u = ft.TextField(label="Edad", keyboard_type=ft.KeyboardType.NUMBER, prefix_icon=ft.Icons.CALENDAR_TODAY, border_radius=10)
     tel_u = ft.TextField(label="Teléfono Móvil", keyboard_type=ft.KeyboardType.PHONE, prefix_icon=ft.Icons.PHONE, border_radius=10)
@@ -57,11 +78,11 @@ def main(page: ft.Page):
             mostrar_alerta("", ft.Colors.TRANSPARENT)
             
             if not nombre_u.value or not tel_u.value:
-                mostrar_alerta("⚠️ Nombre y teléfono son obligatorios.", ft.Colors.RED_400)
+                mostrar_alerta("Nombre y teléfono son obligatorios.", ft.Colors.RED_400)
                 return
 
             if len(tel_u.value.strip()) != 10 or not tel_u.value.strip().isdigit():
-                mostrar_alerta("⚠️ El teléfono debe tener 10 números exactos.", ft.Colors.RED_400)
+                mostrar_alerta(" El teléfono debe tener 10 números exactos.", ft.Colors.RED_400)
                 return
                 
             btn_gu.disabled = True
@@ -87,7 +108,7 @@ def main(page: ft.Page):
                 
                 if check_rapido.value == True or not correo_u.value:
                     DB_NUBE['usuarios'].insert_one(nuevo_usr)
-                    mostrar_alerta("☁️ ¡Usuario guardado en la nube!", ft.Colors.GREEN_400)
+                    mostrar_alerta(" Usuario guardado en la nube", ft.Colors.GREEN_400)
                     nombre_u.value = ""; edad_u.value = ""; tel_u.value = ""; correo_u.value = ""
                 else:
                     codigo_generado = str(random.randint(100000, 999999))
@@ -112,10 +133,10 @@ def main(page: ft.Page):
                             if txt_codigo.value == codigo_generado:
                                 dlg.open = False
                                 DB_NUBE['usuarios'].insert_one(nuevo_usr)
-                                mostrar_alerta("☁️ ¡Código correcto! Guardado en la nube.", ft.Colors.GREEN_400)
+                                mostrar_alerta(" Código correcto Guardado en la nube.", ft.Colors.GREEN_400)
                                 nombre_u.value = ""; edad_u.value = ""; tel_u.value = ""; correo_u.value = ""
                             else:
-                                mostrar_alerta("❌ Código incorrecto.", ft.Colors.RED_400)
+                                mostrar_alerta(" Código incorrecto.", ft.Colors.RED_400)
                                 
                             btn_gu.text = "Guardar Usuario"
                             btn_gu.disabled = False
@@ -141,18 +162,20 @@ def main(page: ft.Page):
                         return 
                         
                     except Exception:
-                        mostrar_alerta("❌ Falló el correo. Usa Modo Rápido.", ft.Colors.RED_400)
+                        mostrar_alerta(" Falló el correo. Usa Modo Rápido.", ft.Colors.RED_400)
 
             except Exception:
-                offline_users = page.client_storage.get("offline_users") or []
-                offline_users.append(nuevo_usr)
-                page.client_storage.set("offline_users", offline_users)
+                con = sqlite3.connect(RUTA_DB)
+                con.execute("INSERT INTO sync_usuarios (nombre_completo, edad, telefono, correo, fecha_expedicion, fecha_vencimiento) VALUES (?,?,?,?,?,?)", 
+                            (nuevo_usr["nombre_completo"], nuevo_usr["edad"], nuevo_usr["telefono"], nuevo_usr["correo"], nuevo_usr["fecha_expedicion"], nuevo_usr["fecha_vencimiento"]))
+                con.commit()
+                con.close()
                 
-                mostrar_alerta("📱 Sin red. Usuario guardado en el teléfono.", ft.Colors.ORANGE_400)
+                mostrar_alerta(" Sin red. Usuario guardado en el teléfono.", ft.Colors.ORANGE_400)
                 nombre_u.value = ""; edad_u.value = ""; tel_u.value = ""; correo_u.value = ""
         
         except Exception as error_critico:
-            mostrar_alerta(f"❌ Error interno: {error_critico}", ft.Colors.RED_400)
+            mostrar_alerta(f" Error interno: {error_critico}", ft.Colors.RED_400)
             
         finally:
             btn_gu.disabled = False
@@ -168,7 +191,7 @@ def main(page: ft.Page):
         try:
             mostrar_alerta("", ft.Colors.TRANSPARENT)
             if not nombre_p.value or not libro_p.value:
-                mostrar_alerta("⚠️ Llena todos los campos.", ft.Colors.RED_400)
+                mostrar_alerta("Llena todos los campos.", ft.Colors.RED_400)
                 return
                 
             btn_gp.disabled = True
@@ -204,7 +227,7 @@ def main(page: ft.Page):
                     correo_usr = usr.get("correo")
                 
                 if not encontrado:
-                    mostrar_alerta("❌ Usuario no encontrado.", ft.Colors.RED_400)
+                    mostrar_alerta(" Usuario no encontrado.", ft.Colors.RED_400)
                     btn_gp.text = "Registrar Préstamo"
                     btn_gp.disabled = False
                     page.update()
@@ -216,21 +239,22 @@ def main(page: ft.Page):
                 if correo_usr:
                     threading.Thread(target=enviar_correo_silencioso, args=(correo_usr, encontrado, lista_libros, s_ent)).start()
 
-                mostrar_alerta(f"☁️ ¡Préstamo activo! Devolución: {s_ent}", ft.Colors.GREEN_400)
+                mostrar_alerta(f" ¡Préstamo activo! Devolución: {s_ent}", ft.Colors.GREEN_400)
                 nombre_p.value = ""; libro_p.value = ""
             
             except Exception:
-                # GUARDADO OFFLINE NATIVO DE FLET
-                offline_prestamos = page.client_storage.get("offline_prestamos") or []
+                con = sqlite3.connect(RUTA_DB)
                 for lib in lista_libros:
-                    offline_prestamos.append({"nombre_usuario": nombre_p.value.strip().title(), "nombre_libro": lib, "fecha_prestamo": s_hoy, "fecha_entrega": s_ent})
-                page.client_storage.set("offline_prestamos", offline_prestamos)
+                    con.execute("INSERT INTO sync_prestamos (nombre_usuario, nombre_libro, fecha_prestamo, fecha_entrega) VALUES (?,?,?,?)", 
+                                (nombre_p.value.strip().title(), lib, s_hoy, s_ent))
+                con.commit()
+                con.close()
                 
-                mostrar_alerta(f"📱 Sin red. Préstamo guardado local.", ft.Colors.ORANGE_400)
+                mostrar_alerta(f" Sin red. Préstamo guardado local.", ft.Colors.ORANGE_400)
                 nombre_p.value = ""; libro_p.value = ""
 
         except Exception as error_critico:
-            mostrar_alerta(f"❌ Error interno: {error_critico}", ft.Colors.RED_400)
+            mostrar_alerta(f" Error interno: {error_critico}", ft.Colors.RED_400)
             
         finally:
             btn_gp.disabled = False
@@ -267,8 +291,8 @@ def main(page: ft.Page):
         btn_nav_p.style.color = ft.Colors.BLUE_400
         page.update()
 
-    btn_nav_u = ft.TextButton("👥 Usuarios", on_click=mostrar_usuarios, style=ft.ButtonStyle(color=ft.Colors.BLUE_400))
-    btn_nav_p = ft.TextButton("📚 Préstamos", on_click=mostrar_prestamos, style=ft.ButtonStyle(color=ft.Colors.GREY_500))
+    btn_nav_u = ft.TextButton(" Usuarios", on_click=mostrar_usuarios, style=ft.ButtonStyle(color=ft.Colors.BLUE_400))
+    btn_nav_p = ft.TextButton(" Préstamos", on_click=mostrar_prestamos, style=ft.ButtonStyle(color=ft.Colors.GREY_500))
     barra_navegacion = ft.Row([btn_nav_u, btn_nav_p], alignment=ft.MainAxisAlignment.CENTER)
 
     def sincronizar(e):
@@ -278,30 +302,39 @@ def main(page: ft.Page):
             
             CLIENTE_MONGO.admin.command('ping')
             
-            usuarios_offline = page.client_storage.get("offline_users") or []
-            prestamos_offline = page.client_storage.get("offline_prestamos") or []
+            con = sqlite3.connect(RUTA_DB)
+            con.row_factory = sqlite3.Row
+            cur = con.cursor()
+            
+            cur.execute("SELECT * FROM sync_usuarios")
+            usuarios_offline = cur.fetchall()
+            for u in usuarios_offline:
+                d = dict(u)
+                d.pop('id')
+                d.update({"domicilio": "Pendiente", "cp": "S/R", "telefono2": "S/R", "ocupacion": "S/R", "escuela_trabajo": "S/R"})
+                DB_NUBE['usuarios'].insert_one(d)
+            cur.execute("DELETE FROM sync_usuarios")
+            
+            cur.execute("SELECT * FROM sync_prestamos")
+            prestamos_offline = cur.fetchall()
+            for p in prestamos_offline:
+                d = dict(p)
+                d.pop('id')
+                d.update({"estado": "Pendiente"})
+                DB_NUBE['prestamos'].insert_one(d)
+            cur.execute("DELETE FROM sync_prestamos")
+            
+            con.commit()
+            con.close()
             
             total = len(usuarios_offline) + len(prestamos_offline)
-            if total == 0:
-                mostrar_alerta("✅ Todo está sincronizado.", ft.Colors.BLUE_400)
-                btn_sync.disabled = False
-                page.update()
-                return
-
-            for u in usuarios_offline:
-                u.update({"domicilio": "Pendiente", "cp": "S/R", "telefono2": "S/R", "ocupacion": "S/R", "escuela_trabajo": "S/R"})
-                DB_NUBE['usuarios'].insert_one(u)
-            page.client_storage.remove("offline_users")
-            
-            for p in prestamos_offline:
-                p.update({"estado": "Pendiente"})
-                DB_NUBE['prestamos'].insert_one(p)
-            page.client_storage.remove("offline_prestamos")
-            
-            mostrar_alerta(f"☁️ ¡{total} registros subidos con éxito!", ft.Colors.BLUE_400)
+            if total > 0:
+                mostrar_alerta(f" ¡{total} registros subidos con éxito!", ft.Colors.BLUE_400)
+            else:
+                mostrar_alerta(" Todo está sincronizado.", ft.Colors.BLUE_400)
                 
         except Exception:
-            mostrar_alerta("❌ Aún no hay red para sincronizar.", ft.Colors.RED_400)
+            mostrar_alerta("Aún no hay red para sincronizar.", ft.Colors.RED_400)
         finally:
             btn_sync.disabled = False
             page.update()
