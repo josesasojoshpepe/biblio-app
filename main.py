@@ -6,15 +6,34 @@ from datetime import datetime, timedelta
 import unicodedata
 import re
 import threading
+import certifi
+
+# LIBRERÍAS DE CORREO
 import smtplib
 import random
 from email.message import EmailMessage
 
+# =======================================================
+# EL TRUCO MAESTRO PARA ANDROID: FORZAR DNS DE GOOGLE
+# =======================================================
+import dns.resolver
+try:
+    dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+    dns.resolver.default_resolver.nameservers = ['8.8.8.8', '8.8.4.4']
+except Exception:
+    pass
+
+# CREDENCIALES
 MONGO_URI = "mongodb+srv://admin_biblioteca:Lopezmateo0710@biblioteca.cz999dn.mongodb.net/?retryWrites=true&w=majority&appName=biblioteca"
 CORREO_REMITENTE = "avisos.biblioteca.adolfolm@gmail.com"
 PASSWORD_APP = "idyhkqahuxnzcosd"
+
+# =======================================================
+# EL TRUCO PARA ANDROID: LA CARPETA SECRETA PERMITIDA
+# =======================================================
 CARPETA_ANDROID = os.environ.get("FLET_APP_STORAGE_DATA", ".")
 RUTA_DB = os.path.join(CARPETA_ANDROID, "movil_cache.db")
+
 def inicializar_cache():
     conexion = sqlite3.connect(RUTA_DB)
     cursor = conexion.cursor()
@@ -31,12 +50,13 @@ def inicializar_cache():
     conexion.close()
 
 inicializar_cache()
+
 def enviar_correo_silencioso(correo, nombre, libros, fecha_limite):
     try:
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=5)
         server.login(CORREO_REMITENTE, PASSWORD_APP)
         msg = EmailMessage()
-        msg['Subject'] = "Confirmación de Préstamo "
+        msg['Subject'] = "Confirmación de Préstamo 📚"
         msg['From'] = f"Biblioteca Centro Recreativo <{CORREO_REMITENTE}>"
         msg['To'] = correo
         libros_str = "\n- ".join(libros)
@@ -54,11 +74,13 @@ def main(page: ft.Page):
     page.padding = 20
     page.scroll = ft.ScrollMode.AUTO
 
+    # Se aumenta el tiempo a 5 segundos para darle tiempo al 4G/WiFi de responder
     try:
-        CLIENTE_MONGO = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2500, tls=True, tlsAllowInvalidCertificates=True)
+        CLIENTE_MONGO = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, tls=True, tlsCAFile=certifi.where())
         DB_NUBE = CLIENTE_MONGO['biblioteca_centro']
     except Exception:
-        pass
+        CLIENTE_MONGO = None
+        DB_NUBE = None
 
     banner_alerta = ft.Text("", size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
     
@@ -78,7 +100,7 @@ def main(page: ft.Page):
             mostrar_alerta("", ft.Colors.TRANSPARENT)
             
             if not nombre_u.value or not tel_u.value:
-                mostrar_alerta("Nombre y teléfono son obligatorios.", ft.Colors.RED_400)
+                mostrar_alerta(" Nombre y teléfono son obligatorios.", ft.Colors.RED_400)
                 return
 
             if len(tel_u.value.strip()) != 10 or not tel_u.value.strip().isdigit():
@@ -104,11 +126,13 @@ def main(page: ft.Page):
             }
             
             try:
+                if CLIENTE_MONGO is None:
+                    raise Exception("Sin conexión inicial")
                 CLIENTE_MONGO.admin.command('ping')
                 
                 if check_rapido.value == True or not correo_u.value:
                     DB_NUBE['usuarios'].insert_one(nuevo_usr)
-                    mostrar_alerta(" Usuario guardado en la nube", ft.Colors.GREEN_400)
+                    mostrar_alerta(" ¡Usuario guardado en la nube!", ft.Colors.GREEN_400)
                     nombre_u.value = ""; edad_u.value = ""; tel_u.value = ""; correo_u.value = ""
                 else:
                     codigo_generado = str(random.randint(100000, 999999))
@@ -133,7 +157,7 @@ def main(page: ft.Page):
                             if txt_codigo.value == codigo_generado:
                                 dlg.open = False
                                 DB_NUBE['usuarios'].insert_one(nuevo_usr)
-                                mostrar_alerta(" Código correcto Guardado en la nube.", ft.Colors.GREEN_400)
+                                mostrar_alerta(" ¡Código correcto! Guardado en la nube.", ft.Colors.GREEN_400)
                                 nombre_u.value = ""; edad_u.value = ""; tel_u.value = ""; correo_u.value = ""
                             else:
                                 mostrar_alerta(" Código incorrecto.", ft.Colors.RED_400)
@@ -171,7 +195,7 @@ def main(page: ft.Page):
                 con.commit()
                 con.close()
                 
-                mostrar_alerta(" Sin red. Usuario guardado en el teléfono.", ft.Colors.ORANGE_400)
+                mostrar_alerta(" Sin red de BD. Guardado en el teléfono.", ft.Colors.ORANGE_400)
                 nombre_u.value = ""; edad_u.value = ""; tel_u.value = ""; correo_u.value = ""
         
         except Exception as error_critico:
@@ -191,7 +215,7 @@ def main(page: ft.Page):
         try:
             mostrar_alerta("", ft.Colors.TRANSPARENT)
             if not nombre_p.value or not libro_p.value:
-                mostrar_alerta("Llena todos los campos.", ft.Colors.RED_400)
+                mostrar_alerta(" Llena todos los campos.", ft.Colors.RED_400)
                 return
                 
             btn_gp.disabled = True
@@ -211,6 +235,8 @@ def main(page: ft.Page):
             lista_libros = [l.strip().title() for l in libro_p.value.split(",") if l.strip()]
 
             try:
+                if CLIENTE_MONGO is None:
+                    raise Exception("Sin conexión inicial")
                 CLIENTE_MONGO.admin.command('ping')
                 col_u = DB_NUBE['usuarios']
                 col_p = DB_NUBE['prestamos']
@@ -227,7 +253,7 @@ def main(page: ft.Page):
                     correo_usr = usr.get("correo")
                 
                 if not encontrado:
-                    mostrar_alerta(" Usuario no encontrado.", ft.Colors.RED_400)
+                    mostrar_alerta(" Usuario no encontrado en la nube.", ft.Colors.RED_400)
                     btn_gp.text = "Registrar Préstamo"
                     btn_gp.disabled = False
                     page.update()
@@ -250,7 +276,7 @@ def main(page: ft.Page):
                 con.commit()
                 con.close()
                 
-                mostrar_alerta(f" Sin red. Préstamo guardado local.", ft.Colors.ORANGE_400)
+                mostrar_alerta(f" Sin red de BD. Préstamo guardado local.", ft.Colors.ORANGE_400)
                 nombre_p.value = ""; libro_p.value = ""
 
         except Exception as error_critico:
@@ -300,6 +326,8 @@ def main(page: ft.Page):
             btn_sync.disabled = True
             mostrar_alerta("Sincronizando...", ft.Colors.BLUE_400)
             
+            if CLIENTE_MONGO is None:
+                raise Exception("Sin conexión")
             CLIENTE_MONGO.admin.command('ping')
             
             con = sqlite3.connect(RUTA_DB)
@@ -334,7 +362,7 @@ def main(page: ft.Page):
                 mostrar_alerta(" Todo está sincronizado.", ft.Colors.BLUE_400)
                 
         except Exception:
-            mostrar_alerta("Aún no hay red para sincronizar.", ft.Colors.RED_400)
+            mostrar_alerta(" Aún no hay red de BD para sincronizar.", ft.Colors.RED_400)
         finally:
             btn_sync.disabled = False
             page.update()
